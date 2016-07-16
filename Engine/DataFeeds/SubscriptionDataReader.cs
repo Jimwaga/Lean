@@ -179,7 +179,7 @@ namespace QuantConnect.Lean.Engine.DataFeeds
             {
                 try
                 {
-                    var mapFile = mapFileResolver.ResolveMapFile(config.Symbol.ID.Symbol, config.Symbol.ID.Date);
+                    var mapFile = mapFileResolver.ResolveMapFile(config.Symbol.Value, DateTime.Today);
 
                     // only take the resolved map file if it has data, otherwise we'll use the empty one we defined above
                     if (mapFile.Any()) _mapFile = mapFile;
@@ -266,9 +266,10 @@ namespace QuantConnect.Lean.Engine.DataFeeds
                     // prevent emitting past data, this can happen when switching symbols on daily data
                     if (_previous != null && _config.Resolution != Resolution.Tick)
                     {
-                        if (_config.Resolution == Resolution.Tick)
+                        if (_config.IsCustomData)
                         {
-                            // allow duplicate times for tick data
+                            // Skip the point if time went backwards for custom data?
+                            // TODO: Should this be the case for all datapoints?
                             if (instance.EndTime < _previous.EndTime) continue;
                         }
                         else
@@ -397,29 +398,17 @@ namespace QuantConnect.Lean.Engine.DataFeeds
             while (true);
         }
 
-        private ISubscriptionFactory CreateSubscriptionFactory(SubscriptionDataSource source)
+        private ISubscriptionDataSourceReader CreateSubscriptionFactory(SubscriptionDataSource source)
         {
-            switch (source.Format)
-            {
-                case FileFormat.Csv:
-                    return HandleCsvFileFormat(source);
-
-                case FileFormat.Binary:
-                    throw new NotSupportedException("Binary file format is not supported");
-
-                default:
-                    throw new ArgumentOutOfRangeException();
-            }
+            var factory = SubscriptionDataSourceReader.ForSource(source, _config, _tradeableDates.Current, _isLiveMode);
+            AttachEventHandlers(factory, source);
+            return factory;
         }
 
-        private ISubscriptionFactory HandleCsvFileFormat(SubscriptionDataSource source)
+        private void AttachEventHandlers(ISubscriptionDataSourceReader dataSourceReader, SubscriptionDataSource source)
         {
-            // convert the date to the data time zone 
-            var dateInDataTimeZone = _tradeableDates.Current.ConvertTo(_config.ExchangeTimeZone, _config.DataTimeZone).Date;
-            var factory = new BaseDataSubscriptionFactory(_config, dateInDataTimeZone, _isLiveMode);
-
             // handle missing files
-            factory.InvalidSource += (sender, args) =>
+            dataSourceReader.InvalidSource += (sender, args) =>
             {
                 switch (args.Source.TransportMedium)
                 {
@@ -442,22 +431,25 @@ namespace QuantConnect.Lean.Engine.DataFeeds
                 }
             };
 
-            // handle empty files/instantiation errors
-            factory.CreateStreamReaderError += (sender, args) =>
+            if (dataSourceReader is TextSubscriptionDataSourceReader)
             {
-                Log.Error(string.Format("Failed to get StreamReader for data source({0}), symbol({1}). Skipping date({2}). Reader is null.", args.Source.Source, _mappedSymbol, args.Date.ToShortDateString()));
-                if (_config.IsCustomData)
+                // handle empty files/instantiation errors
+                var textSubscriptionFactory = (TextSubscriptionDataSourceReader)dataSourceReader;
+                textSubscriptionFactory.CreateStreamReaderError += (sender, args) =>
                 {
-                    _resultHandler.ErrorMessage(string.Format("We could not fetch the requested data. This may not be valid data, or a failed download of custom data. Skipping source ({0}).", args.Source.Source));
-                }
-            };
+                    Log.Error(string.Format("Failed to get StreamReader for data source({0}), symbol({1}). Skipping date({2}). Reader is null.", args.Source.Source, _mappedSymbol, args.Date.ToShortDateString()));
+                    if (_config.IsCustomData)
+                    {
+                        _resultHandler.ErrorMessage(string.Format("We could not fetch the requested data. This may not be valid data, or a failed download of custom data. Skipping source ({0}).", args.Source.Source));
+                    }
+                };
 
-            // handle parser errors
-            factory.ReaderError += (sender, args) =>
-            {
-                _resultHandler.RuntimeError(string.Format("Error invoking {0} data reader. Line: {1} Error: {2}", _config.Symbol, args.Line, args.Exception.Message), args.Exception.StackTrace);
-            };
-            return factory;
+                // handle parser errors
+                textSubscriptionFactory.ReaderError += (sender, args) =>
+                {
+                    _resultHandler.RuntimeError(string.Format("Error invoking {0} data reader. Line: {1} Error: {2}", _config.Symbol, args.Line, args.Exception.Message), args.Exception.StackTrace);
+                };
+            }
         }
 
         /// <summary>

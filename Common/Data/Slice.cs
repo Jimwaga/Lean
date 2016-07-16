@@ -27,8 +27,10 @@ namespace QuantConnect.Data
     /// </summary>
     public class Slice : IEnumerable<KeyValuePair<Symbol, BaseData>>
     {
-        private readonly Ticks _ticks; 
+        private readonly Ticks _ticks;
         private readonly TradeBars _bars;
+        private readonly QuoteBars _quoteBars;
+        private readonly OptionChains _optionChains;
 
         // aux data
         private readonly Splits _splits;
@@ -67,11 +69,27 @@ namespace QuantConnect.Data
         }
 
         /// <summary>
+        /// Gets the <see cref="QuoteBars"/> for this slice of data
+        /// </summary>
+        public QuoteBars QuoteBars
+        {
+            get { return _quoteBars; }
+        }
+
+        /// <summary>
         /// Gets the <see cref="Ticks"/> for this slice of data
         /// </summary>
         public Ticks Ticks
         {
             get { return _ticks; }
+        }
+
+        /// <summary>
+        /// Gets the <see cref="OptionChains"/> for this slice of data
+        /// </summary>
+        public OptionChains OptionChains
+        {
+            get { return _optionChains; }
         }
 
         /// <summary>
@@ -138,7 +156,7 @@ namespace QuantConnect.Data
         /// <param name="time">The timestamp for this slice of data</param>
         /// <param name="data">The raw data in this slice</param>
         public Slice(DateTime time, IEnumerable<BaseData> data)
-            : this(time, data, null, null, null, null, null, null)
+            : this(time, data, null, null, null, null, null, null, null, null)
         {
         }
 
@@ -148,13 +166,15 @@ namespace QuantConnect.Data
         /// <param name="time">The timestamp for this slice of data</param>
         /// <param name="data">The raw data in this slice</param>
         /// <param name="tradeBars">The trade bars for this slice</param>
+        /// <param name="quoteBars">The quote bars for this slice</param>
         /// <param name="ticks">This ticks for this slice</param>
+        /// <param name="optionChains">The option chains for this slice</param>
         /// <param name="splits">The splits for this slice</param>
         /// <param name="dividends">The dividends for this slice</param>
         /// <param name="delistings">The delistings for this slice</param>
         /// <param name="symbolChanges">The symbol changed events for this slice</param>
         /// <param name="hasData">true if this slice contains data</param>
-        public Slice(DateTime time, IEnumerable<BaseData> data, TradeBars tradeBars, Ticks ticks, Splits splits, Dividends dividends, Delistings delistings, SymbolChangedEvents symbolChanges, bool? hasData = null)
+        public Slice(DateTime time, IEnumerable<BaseData> data, TradeBars tradeBars, QuoteBars quoteBars, Ticks ticks, OptionChains optionChains, Splits splits, Dividends dividends, Delistings delistings, SymbolChangedEvents symbolChanges, bool? hasData = null)
         {
             Time = time;
 
@@ -167,6 +187,8 @@ namespace QuantConnect.Data
 
             _ticks = CreateTicksCollection(ticks);
             _bars = CreateCollection<TradeBars, TradeBar>(tradeBars);
+            _quoteBars = CreateCollection<QuoteBars, QuoteBar>(quoteBars);
+            _optionChains = CreateCollection<OptionChains, OptionChain>(optionChains);
 
             // auxiliary data
             _splits = CreateCollection<Splits, Split>(splits);
@@ -207,10 +229,18 @@ namespace QuantConnect.Data
             Lazy<object> dictionary;
             if (!_dataByType.TryGetValue(typeof(T), out dictionary))
             {
-                dictionary = new Lazy<object>(() => new DataDictionary<T>(_data.Value.Values.Select(x => x.GetData()).OfType<T>(), x => x.Symbol));
-                _dataByType[typeof (T)] = dictionary;
+                if (typeof(T) == typeof(Tick))
+                {
+                    dictionary = new Lazy<object>(() => new DataDictionary<T>(_data.Value.Values.SelectMany<dynamic, dynamic>(x => x.GetData()).OfType<T>(), x => x.Symbol));
+                }
+                else
+                {
+                    dictionary = new Lazy<object>(() => new DataDictionary<T>(_data.Value.Values.Select(x => x.GetData()).OfType<T>(), x => x.Symbol));
+                }
+
+                _dataByType[typeof(T)] = dictionary;
             }
-            return (DataDictionary<T>) dictionary.Value;
+            return (DataDictionary<T>)dictionary.Value;
         }
 
         /// <summary>
@@ -277,12 +307,12 @@ namespace QuantConnect.Data
 
                     case MarketDataType.TradeBar:
                         symbolData.Type = SubscriptionType.TradeBar;
-                        symbolData.TradeBar = (TradeBar) datum;
+                        symbolData.TradeBar = (TradeBar)datum;
                         break;
 
                     case MarketDataType.Tick:
                         symbolData.Type = SubscriptionType.Tick;
-                        symbolData.Ticks.Add((Tick) datum);
+                        symbolData.Ticks.Add((Tick)datum);
                         break;
 
                     case MarketDataType.Auxiliary:
@@ -322,7 +352,7 @@ namespace QuantConnect.Data
             where TItem : BaseData
         {
             if (collection != null) return collection;
-            collection = new T(); 
+            collection = new T();
 #pragma warning disable 618 // This assignment is left here until the Time property is removed.
             collection.Time = Time;
 #pragma warning restore 618

@@ -295,8 +295,8 @@ namespace QuantConnect.Lean.Engine.Results
                     var upTime = DateTime.UtcNow - _launchTimeUtc;
                     serverStatistics["Up Time"] = string.Format("{0}d {1:hh\\:mm\\:ss}", upTime.Days, upTime);
 
-                    // only send holdings updates when we have changes in orders, except for first time, then we want to send all
-                    foreach (var asset in _algorithm.Securities.Values.Where(x => !x.SubscriptionDataConfig.IsInternalFeed).OrderBy(x => x.Symbol.Value))
+                    // Only send holdings updates when we have changes in orders, except for first time, then we want to send all
+                    foreach (var asset in _algorithm.Securities.Values.Where(x => !x.IsInternalFeed()).OrderBy(x => x.Symbol.Value))
                     {
                         holdings.Add(asset.Symbol.Value, new Holding(asset));
                     }
@@ -312,11 +312,16 @@ namespace QuantConnect.Lean.Engine.Results
                     }
                     Log.Debug("LiveTradingResultHandler.Update(): End build run time stats");
 
+                    //Some users have $0 in their brokerage account / starting cash of $0. Prevent divide by zero errors
+                    var netReturn = _setupHandler.StartingPortfolioValue > 0 ?
+                                    (_algorithm.Portfolio.TotalPortfolioValue - _setupHandler.StartingPortfolioValue) / _setupHandler.StartingPortfolioValue
+                                    : 0;
+
                     //Add other fixed parameters.
                     runtimeStatistics.Add("Unrealized:", "$" + _algorithm.Portfolio.TotalUnrealizedProfit.ToString("N2"));
                     runtimeStatistics.Add("Fees:", "-$" + _algorithm.Portfolio.TotalFees.ToString("N2"));
                     runtimeStatistics.Add("Net Profit:", "$" + _algorithm.Portfolio.TotalProfit.ToString("N2"));
-                    runtimeStatistics.Add("Return:", ((_algorithm.Portfolio.TotalPortfolioValue - _setupHandler.StartingPortfolioValue) / _setupHandler.StartingPortfolioValue).ToString("P"));
+                    runtimeStatistics.Add("Return:", netReturn.ToString("P"));
                     runtimeStatistics.Add("Equity:", "$" + _algorithm.Portfolio.TotalPortfolioValue.ToString("N2"));
                     runtimeStatistics.Add("Holdings:", "$" + _algorithm.Portfolio.TotalHoldingsValue.ToString("N2"));
                     runtimeStatistics.Add("Volume:", "$" + _algorithm.Portfolio.TotalSaleVolume.ToString("N2"));
@@ -382,7 +387,7 @@ namespace QuantConnect.Lean.Engine.Results
                                 _algorithm.Portfolio.TotalProfit,
                                 _algorithm.Portfolio.TotalHoldingsValue, 
                                 _algorithm.Portfolio.TotalPortfolioValue,
-                                ((_algorithm.Portfolio.TotalPortfolioValue - _setupHandler.StartingPortfolioValue) / _setupHandler.StartingPortfolioValue),
+                                netReturn,
                                 _algorithm.Portfolio.TotalSaleVolume, 
                                 _lastOrderId, 0);
                         }
@@ -613,7 +618,7 @@ namespace QuantConnect.Lean.Engine.Results
         {
             // don't send stockplots for internal feeds
             Security security;
-            if (_algorithm.Securities.TryGetValue(symbol, out security) && !security.SubscriptionDataConfig.IsInternalFeed && value > 0)
+            if (_algorithm.Securities.TryGetValue(symbol, out security) && !security.IsInternalFeed() && value > 0)
             {
                 var now = DateTime.UtcNow.ConvertFromUtc(security.Exchange.TimeZone);
                 if (security.Exchange.Hours.IsOpen(now, security.IsExtendedMarketHours))

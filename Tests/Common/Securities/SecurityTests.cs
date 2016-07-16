@@ -14,6 +14,7 @@
 */
 
 using System;
+using System.Linq;
 using NUnit.Framework;
 using QuantConnect.Data;
 using QuantConnect.Data.Market;
@@ -34,7 +35,7 @@ namespace QuantConnect.Tests.Common.Securities
             var config = CreateTradeBarConfig();
             var security = new Security(exchangeHours, config, new Cash(CashBook.AccountCurrency, 0, 1m), SymbolProperties.GetDefault(CashBook.AccountCurrency));
 
-            Assert.AreEqual(config, security.SubscriptionDataConfig);
+            Assert.AreEqual(config, security.Subscriptions.Single());
             Assert.AreEqual(config.Symbol, security.Symbol);
             Assert.AreEqual(config.SecurityType, security.Type);
             Assert.AreEqual(config.Resolution, security.Resolution);
@@ -118,15 +119,17 @@ namespace QuantConnect.Tests.Common.Securities
             Assert.AreEqual(102m, security.Close);
             Assert.AreEqual(100000, security.Volume);
 
-            // Update security price with a tick with higher prices
+            // High/Close property is only modified by IBar instances
             security.SetMarketPrice(new Tick(DateTime.Now, Symbols.SPY, 104m, 104m, 104m));
-            Assert.AreEqual(104m, security.High);
-            Assert.AreEqual(104m, security.Close);
+            Assert.AreEqual(103m, security.High);
+            Assert.AreEqual(102m, security.Close);
+            Assert.AreEqual(104m, security.Price);
 
-            // Update security price with a tick with lower prices
+            // Low/Close property is only modified by IBar instances
             security.SetMarketPrice(new Tick(DateTime.Now, Symbols.SPY, 99m, 99m, 99m));
-            Assert.AreEqual(99m, security.Low);
-            Assert.AreEqual(99m, security.Close);
+            Assert.AreEqual(100m, security.Low);
+            Assert.AreEqual(102m, security.Close);
+            Assert.AreEqual(99m, security.Price);
         }
 
         [Test]

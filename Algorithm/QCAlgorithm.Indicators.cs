@@ -847,6 +847,209 @@ namespace QuantConnect.Algorithm
         }
 
         /// <summary>
+        /// Creates a new Heikin-Ashi indicator.
+        /// </summary>
+        /// <param name="symbol">The symbol whose Heikin-Ashi we want</param>
+        /// <param name="resolution">The resolution</param>
+        /// <param name="selector">Selects a value from the BaseData to send into the indicator, if null defaults to the Value property of BaseData (x => x.Value)</param>
+        /// <returns>The Heikin-Ashi indicator for the requested symbol over the specified period</returns>
+        public HeikinAshi HeikinAshi(Symbol symbol, Resolution? resolution = null, Func<BaseData, TradeBar> selector = null)
+        {
+            var name = CreateIndicatorName(symbol, "HA", resolution);
+            var ha = new HeikinAshi(name);
+            RegisterIndicator(symbol, ha, resolution, selector);
+            return ha;
+        }
+
+        /// <summary>
+        /// Creates a new AverageDirectionalMovementIndexRating indicator.
+        /// </summary>
+        /// <param name="symbol">The symbol whose ADXR we want</param>
+        /// <param name="period">The period over which to compute the ADXR</param>
+        /// <param name="resolution">The resolution</param>
+        /// <param name="selector">Selects a value from the BaseData to send into the indicator, if null defaults to the Value property of BaseData (x => x.Value)</param>
+        /// <returns>The AverageDirectionalMovementIndexRating indicator for the requested symbol over the specified period</returns>
+        public AverageDirectionalMovementIndexRating ADXR(Symbol symbol, int period, Resolution? resolution = null, Func<BaseData, TradeBar> selector = null)
+        {
+            var name = CreateIndicatorName(symbol, "ADXR" + period, resolution);
+            var adxr = new AverageDirectionalMovementIndexRating(name, period);
+            RegisterIndicator(symbol, adxr, resolution, selector);
+            return adxr;
+        }
+
+        /// <summary>
+        /// Creates a new KaufmanAdaptiveMovingAverage indicator.
+        /// </summary>
+        /// <param name="symbol">The symbol whose KAMA we want</param>
+        /// <param name="period">The period over which to compute the KAMA</param>
+        /// <param name="resolution">The resolution</param>
+        /// <param name="selector">Selects a value from the BaseData to send into the indicator, if null defaults to the Value property of BaseData (x => x.Value)</param>
+        /// <returns>The KaufmanAdaptiveMovingAverage indicator for the requested symbol over the specified period</returns>
+        public KaufmanAdaptiveMovingAverage KAMA(Symbol symbol, int period, Resolution? resolution = null, Func<BaseData, decimal> selector = null)
+        {
+            var name = CreateIndicatorName(symbol, "KAMA" + period, resolution);
+            var kama = new KaufmanAdaptiveMovingAverage(name, period);
+            RegisterIndicator(symbol, kama, resolution, selector);
+            return kama;
+        }
+
+        /// <summary>
+        /// Creates a new MidPoint indicator.
+        /// </summary>
+        /// <param name="symbol">The symbol whose MIDPOINT we want</param>
+        /// <param name="period">The period over which to compute the MIDPOINT</param>
+        /// <param name="resolution">The resolution</param>
+        /// <param name="selector">Selects a value from the BaseData to send into the indicator, if null defaults to the Value property of BaseData (x => x.Value)</param>
+        /// <returns>The MidPoint indicator for the requested symbol over the specified period</returns>
+        public MidPoint MIDPOINT(Symbol symbol, int period, Resolution? resolution = null, Func<BaseData, decimal> selector = null)
+        {
+            var name = CreateIndicatorName(symbol, "MIDPOINT" + period, resolution);
+            var midpoint = new MidPoint(name, period);
+            RegisterIndicator(symbol, midpoint, resolution, selector);
+            return midpoint;
+        }
+
+        /// <summary>
+        /// Creates a new UltimateOscillator indicator.
+        /// </summary>
+        /// <param name="symbol">The symbol whose ULTOSC we want</param>
+        /// <param name="period1">The first period over which to compute the ULTOSC</param>
+        /// <param name="period2">The second period over which to compute the ULTOSC</param>
+        /// <param name="period3">The third period over which to compute the ULTOSC</param>
+        /// <param name="resolution">The resolution</param>
+        /// <param name="selector">Selects a value from the BaseData to send into the indicator, if null defaults to the Value property of BaseData (x => x.Value)</param>
+        /// <returns>The UltimateOscillator indicator for the requested symbol over the specified period</returns>
+        public UltimateOscillator ULTOSC(Symbol symbol, int period1, int period2, int period3, Resolution? resolution = null, Func<BaseData, TradeBar> selector = null)
+        {
+            var name = CreateIndicatorName(symbol, string.Format("ULTOSC({0},{1},{2})", period1, period2, period3), resolution);
+            var ultosc = new UltimateOscillator(name, period1, period2, period3);
+            RegisterIndicator(symbol, ultosc, resolution, selector);
+            return ultosc;
+        }
+
+        /// <summary>
+        /// Creates a new Trix indicator.
+        /// </summary>
+        /// <param name="symbol">The symbol whose TRIX we want</param>
+        /// <param name="period">The period over which to compute the TRIX</param>
+        /// <param name="resolution">The resolution</param>
+        /// <param name="selector">Selects a value from the BaseData to send into the indicator, if null defaults to the Value property of BaseData (x => x.Value)</param>
+        /// <returns>The Trix indicator for the requested symbol over the specified period</returns>
+        public Trix TRIX(Symbol symbol, int period, Resolution? resolution = null, Func<BaseData, decimal> selector = null)
+        {
+            var name = CreateIndicatorName(symbol, "TRIX" + period, resolution);
+            var trix = new Trix(name, period);
+            RegisterIndicator(symbol, trix, resolution, selector);
+            return trix;
+        }
+
+        /// <summary>
+        /// Creates a new MidPrice indicator.
+        /// </summary>
+        /// <param name="symbol">The symbol whose MIDPRICE we want</param>
+        /// <param name="period">The period over which to compute the MIDPRICE</param>
+        /// <param name="resolution">The resolution</param>
+        /// <param name="selector">Selects a value from the BaseData to send into the indicator, if null defaults to the Value property of BaseData (x => x.Value)</param>
+        /// <returns>The MidPrice indicator for the requested symbol over the specified period</returns>
+        public MidPrice MIDPRICE(Symbol symbol, int period, Resolution? resolution = null, Func<BaseData, TradeBar> selector = null)
+        {
+            var name = CreateIndicatorName(symbol, "MIDPRICE" + period, resolution);
+            var midprice = new MidPrice(name, period);
+            RegisterIndicator(symbol, midprice, resolution, selector);
+            return midprice;
+        }
+
+        /// <summary>
+        /// Creates a new AbsolutePriceOscillator indicator.
+        /// </summary>
+        /// <param name="symbol">The symbol whose APO we want</param>
+        /// <param name="fastPeriod">The fast moving average period</param>
+        /// <param name="slowPeriod">The slow moving average period</param>
+        /// <param name="movingAverageType">The type of moving average to use</param>
+        /// <param name="resolution">The resolution</param>
+        /// <param name="selector">Selects a value from the BaseData to send into the indicator, if null defaults to the Value property of BaseData (x => x.Value)</param>
+        /// <returns>The AbsolutePriceOscillator indicator for the requested symbol over the specified period</returns>
+        public AbsolutePriceOscillator APO(Symbol symbol, int fastPeriod, int slowPeriod, MovingAverageType movingAverageType, Resolution? resolution = null, Func<BaseData, decimal> selector = null)
+        {
+            var name = CreateIndicatorName(symbol, string.Format("APO({0},{1})", fastPeriod, slowPeriod), resolution);
+            var apo = new AbsolutePriceOscillator(name, fastPeriod, slowPeriod, movingAverageType);
+            RegisterIndicator(symbol, apo, resolution, selector);
+            return apo;
+        }
+
+        /// <summary>
+        /// Creates a new PercentagePriceOscillator indicator.
+        /// </summary>
+        /// <param name="symbol">The symbol whose PPO we want</param>
+        /// <param name="fastPeriod">The fast moving average period</param>
+        /// <param name="slowPeriod">The slow moving average period</param>
+        /// <param name="movingAverageType">The type of moving average to use</param>
+        /// <param name="resolution">The resolution</param>
+        /// <param name="selector">Selects a value from the BaseData to send into the indicator, if null defaults to the Value property of BaseData (x => x.Value)</param>
+        /// <returns>The PercentagePriceOscillator indicator for the requested symbol over the specified period</returns>
+        public PercentagePriceOscillator PPO(Symbol symbol, int fastPeriod, int slowPeriod, MovingAverageType movingAverageType, Resolution? resolution = null, Func<BaseData, decimal> selector = null)
+        {
+            var name = CreateIndicatorName(symbol, string.Format("PPO({0},{1})", fastPeriod, slowPeriod), resolution);
+            var ppo = new PercentagePriceOscillator(name, fastPeriod, slowPeriod, movingAverageType);
+            RegisterIndicator(symbol, ppo, resolution, selector);
+            return ppo;
+        }
+
+        /// <summary>
+        /// Creates an VolumeWeightedAveragePrice (VWAP) indicator for the symbol. The indicator will be automatically
+        /// updated on the given resolution.
+        /// </summary>
+        /// <param name="symbol">The symbol whose VWAP we want</param>
+        /// <param name="period">The period of the VWAP</param>
+        /// <param name="resolution">The resolution</param>
+        /// <param name="selector">Selects a value from the BaseData to send into the indicator, if null defaults to the Value property of BaseData (x => x.Value)</param>
+        /// <returns>The VolumeWeightedAveragePrice for the given parameters</returns>
+        public VolumeWeightedAveragePriceIndicator VWAP(Symbol symbol, int period, Resolution? resolution = null, Func<BaseData, TradeBar> selector = null)
+        {
+            var name = CreateIndicatorName(symbol, "VWAP" + period, resolution);
+            var vwap = new VolumeWeightedAveragePriceIndicator(name, period);
+            RegisterIndicator(symbol, vwap, resolution, selector);
+            return vwap;
+        }
+
+        /// <summary>
+        /// Creates an FractalAdaptiveMovingAverage (FRAMA) indicator for the symbol. The indicator will be automatically
+        /// updated on the given resolution.
+        /// </summary>
+        /// <param name="symbol">The symbol whose FRAMA we want</param>
+        /// <param name="period">The period of the FRAMA</param>
+        /// <param name="longPeriod">The long period of the FRAMA</param>
+        /// <param name="resolution">The resolution</param>
+        /// <param name="selector">Selects a value from the BaseData to send into the indicator, if null defaults to the Value property of BaseData (x => x.Value)</param>
+        /// <returns>The FRAMA for the given parameters</returns>
+        public FractalAdaptiveMovingAverage FRAMA(Symbol symbol, int period, int longPeriod = 198, Resolution? resolution = null)
+        {
+            var name = CreateIndicatorName(symbol, "FRAMA" + period, resolution);
+            var frama = new FractalAdaptiveMovingAverage(name, period, longPeriod);
+            RegisterIndicator(symbol, frama, resolution);
+            return frama;
+        }
+
+        /// <summary>
+        /// Creates Swiss Army Knife transformation for the symbol. The indicator will be automatically
+        /// updated on the given resolution.
+        /// </summary>
+        /// <param name="symbol">The symbol to use for calculations</param>
+        /// <param name="period">The period of the calculation</param>
+        /// <param name="delta">The delta scale of the BandStop or BandPass</param>
+        /// <param name="tool">The tool os the Swiss Army Knife</param>
+        /// <param name="resolution">The resolution</param>
+        /// <param name="selector">elects a value from the BaseData to send into the indicator, if null defaults to the Value property of BaseData (x => x.Value)</param>
+        /// <returns>The calculation using the given tool</returns>
+        public SwissArmyKnife SWISS(Symbol symbol, int period, double delta, SwissArmyKnifeTool tool, Resolution? resolution = null, Func<BaseData, decimal> selector = null)
+        {
+            string name = CreateIndicatorName(symbol, "SWISS" + period, resolution);
+            var swiss = new SwissArmyKnife(name, period, delta, tool);
+            RegisterIndicator(symbol, swiss, resolution, selector);
+            return swiss;
+        }
+
+        /// <summary>
         /// Creates and registers a new consolidator to receive automatic updates at the specified resolution as well as configures
         /// the indicator to receive updates from the consolidator.
         /// </summary>

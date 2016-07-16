@@ -33,6 +33,7 @@ using QuantConnect.Logging;
 using QuantConnect.Orders;
 using QuantConnect.Packets;
 using QuantConnect.Securities;
+using QuantConnect.Util;
 
 namespace QuantConnect.Lean.Engine
 {
@@ -151,6 +152,8 @@ namespace QuantConnect.Lean.Engine
 
             // Algorithm 2.0 data accessors
             var hasOnDataTradeBars = AddMethodInvoker<TradeBars>(algorithm, methodInvokers);
+            var hasOnDataQuoteBars = AddMethodInvoker<QuoteBars>(algorithm, methodInvokers);
+            var hasOnDataOptionChains = AddMethodInvoker<OptionChains>(algorithm, methodInvokers);
             var hasOnDataTicks = AddMethodInvoker<Ticks>(algorithm, methodInvokers);
 
             // dividend and split events
@@ -167,8 +170,8 @@ namespace QuantConnect.Lean.Engine
             //Go through the subscription types and create invokers to trigger the event handlers for each custom type:
             foreach (var config in algorithm.SubscriptionManager.Subscriptions) 
             {
-                //If type is a tradebar, combine tradebars and ticks into unified array:
-                if (config.Type.Name != "TradeBar" && config.Type.Name != "Tick" && !config.IsInternalFeed) 
+                //If type is a custom feed, check for a dedicated event handler
+                if (config.IsCustomData) 
                 {
                     //Get the matching method for this event handler - e.g. public void OnData(Quandl data) { .. }
                     var genericMethod = (algorithm.GetType()).GetMethod("OnData", new[] { config.Type });
@@ -300,21 +303,26 @@ namespace QuantConnect.Lean.Engine
                 }
 
                 //On each time step push the real time prices to the cashbook so we can have updated conversion rates
-                foreach (var kvp in timeSlice.CashBookUpdateData)
+                foreach (var update in timeSlice.CashBookUpdateData)
                 {
-                    kvp.Key.Update(kvp.Value);
+                    var cash = update.Target;
+                    foreach (var data in update.Data)
+                    {
+                        cash.Update(data);
+                    }
                 }
 
                 //Update the securities properties: first before calling user code to avoid issues with data
-                foreach (var kvp in timeSlice.SecuritiesUpdateData)
+                foreach (var update in timeSlice.SecuritiesUpdateData)
                 {
-                    kvp.Key.SetMarketPrice(kvp.Value);
+                    var security = update.Target;
+                    foreach (var data in update.Data)
+                    {
+                        security.SetMarketPrice(data);
+                    }
 
                     // Send market price updates to the TradeBuilder
-                    if (kvp.Value != null)
-                    {
-                        algorithm.TradeBuilder.SetMarketPrice(kvp.Key.Symbol, kvp.Value.Price);
-                    }
+                    algorithm.TradeBuilder.SetMarketPrice(security.Symbol, security.Price);
                 }
 
                 // fire real time events after we've updated based on the new data
@@ -428,7 +436,7 @@ namespace QuantConnect.Lean.Engine
                 // apply dividends
                 foreach (var dividend in timeSlice.Slice.Dividends.Values)
                 {
-                    Log.Trace("AlgorithmManager.Run(): Applying Dividend for " + dividend.Symbol.ToString(), true);
+                    Log.Trace("AlgorithmManager.Run(): {0}: Applying Dividend for {1}", algorithm.Time, dividend.Symbol.ToString());
                     algorithm.Portfolio.ApplyDividend(dividend);
                 }
 
@@ -437,10 +445,10 @@ namespace QuantConnect.Lean.Engine
                 {
                     try
                     {
-                        Log.Trace("AlgorithmManager.Run(): Applying Split for " + split.Symbol.ToString(), true);
+                        Log.Trace("AlgorithmManager.Run(): {0}: Applying Split for {1}", algorithm.Time, split.Symbol.ToString());
                         algorithm.Portfolio.ApplySplit(split);
                         // apply the split to open orders as well in raw mode, all other modes are split adjusted
-                        if (_liveMode || algorithm.Securities[split.Symbol].SubscriptionDataConfig.DataNormalizationMode == DataNormalizationMode.Raw)
+                        if (_liveMode || algorithm.Securities[split.Symbol].DataNormalizationMode == DataNormalizationMode.Raw)
                         {
                             // in live mode we always want to have our order match the order at the brokerage, so apply the split to the orders
                             var openOrders = transactions.GetOrderTickets(ticket => ticket.Status.IsOpen() && ticket.Symbol == split.Symbol);
@@ -459,10 +467,10 @@ namespace QuantConnect.Lean.Engine
                 //Update registered consolidators for this symbol index
                 try
                 {
-                    foreach (var kvp in timeSlice.ConsolidatorUpdateData)
+                    foreach (var update in timeSlice.ConsolidatorUpdateData)
                     {
-                        var consolidators = kvp.Key.Consolidators;
-                        foreach (var dataPoint in kvp.Value)
+                        var consolidators = update.Target.Consolidators;
+                        foreach (var dataPoint in update.Data)
                         {
                             foreach (var consolidator in consolidators)
                             {
@@ -480,20 +488,19 @@ namespace QuantConnect.Lean.Engine
                 }
 
                 // fire custom event handlers
-                foreach (var kvp in timeSlice.CustomData)
+                foreach (var update in timeSlice.CustomData)
                 {
                     MethodInvoker methodInvoker;
-                    var type = kvp.Key.SubscriptionDataConfig.Type;
-                    if (!methodInvokers.TryGetValue(type, out methodInvoker))
+                    if (!methodInvokers.TryGetValue(update.DataType, out methodInvoker))
                     {
                         continue;
                     }
 
                     try
                     {
-                        foreach (var dataPoint in kvp.Value)
+                        foreach (var dataPoint in update.Data)
                         {
-                            if (type.IsInstanceOfType(dataPoint))
+                            if (update.DataType.IsInstanceOfType(dataPoint))
                             {
                                 methodInvoker(algorithm, dataPoint);
                             }
@@ -539,6 +546,8 @@ namespace QuantConnect.Lean.Engine
                 try
                 {
                     if (hasOnDataTradeBars && timeSlice.Slice.Bars.Count > 0) methodInvokers[typeof(TradeBars)](algorithm, timeSlice.Slice.Bars);
+                    if (hasOnDataQuoteBars && timeSlice.Slice.QuoteBars.Count > 0) methodInvokers[typeof(QuoteBars)](algorithm, timeSlice.Slice.QuoteBars);
+                    if (hasOnDataOptionChains && timeSlice.Slice.OptionChains.Count > 0) methodInvokers[typeof(OptionChains)](algorithm, timeSlice.Slice.OptionChains);
                     if (hasOnDataTicks && timeSlice.Slice.Ticks.Count > 0) methodInvokers[typeof(Ticks)](algorithm, timeSlice.Slice.Ticks);
                 }
                 catch (Exception err)
@@ -675,7 +684,7 @@ namespace QuantConnect.Lean.Engine
                 foreach (var request in historyRequests)
                 {
                     Security security;
-                    if (algorithm.Securities.TryGetValue(request.Symbol, out security) && security.SubscriptionDataConfig.IsInternalFeed)
+                    if (algorithm.Securities.TryGetValue(request.Symbol, out security) && security.IsInternalFeed())
                     {
                         if (request.Resolution < minResolution)
                         {
@@ -708,7 +717,7 @@ namespace QuantConnect.Lean.Engine
                     try
                     {
                         // we need to recombine this slice into a time slice
-                        var paired = new List<KeyValuePair<Security, List<BaseData>>>();
+                        var paired = new List<DataFeedPacket>();
                         foreach (var symbol in slice.Keys)
                         {
                             var security = algorithm.Securities[symbol];
@@ -717,7 +726,7 @@ namespace QuantConnect.Lean.Engine
                             var ticks = data as List<Tick>;
                             if (ticks != null) list.AddRange(ticks);
                             else               list.Add(data);
-                            paired.Add(new KeyValuePair<Security, List<BaseData>>(security, list));
+                            paired.Add(new DataFeedPacket(security, security.Subscriptions.First(), list));
                         }
                         timeSlice = TimeSlice.Create(slice.Time.ConvertToUtc(timeZone), timeZone, algorithm.Portfolio.CashBook, paired, SecurityChanges.None);
                     }
@@ -884,8 +893,5 @@ namespace QuantConnect.Lean.Engine
                 Log.Error(err);
             }
         }
-
-
-    } // End of AlgorithmManager
-
-} // End of Namespace.
+    }
+}

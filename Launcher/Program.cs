@@ -17,7 +17,9 @@
 using System;
 using System.ComponentModel.Composition;
 using System.Threading;
+using System.Windows.Forms;
 using QuantConnect.Configuration;
+using QuantConnect.Interfaces;
 using QuantConnect.Lean.Engine;
 using QuantConnect.Logging;
 using QuantConnect.Packets;
@@ -31,20 +33,20 @@ namespace QuantConnect.Lean.Launcher
 
         static void Main(string[] args)
         {
-            Log.LogHandler = Composer.Instance.GetExportedValueByTypeName<ILogHandler>(Config.Get("log-handler", "CompositeLogHandler"));
-
             //Initialize:
-            string mode = "RELEASE";
+            var mode = "RELEASE";
+            #if DEBUG
+                mode = "DEBUG";
+            #endif
+
+            var environment = Config.Get("environment");
             var liveMode = Config.GetBool("live-mode");
             Log.DebuggingEnabled = Config.GetBool("debug-mode");
-
-#if DEBUG
-            mode = "DEBUG";
-#endif
-
+            Log.LogHandler = Composer.Instance.GetExportedValueByTypeName<ILogHandler>(Config.Get("log-handler", "CompositeLogHandler"));
+   
             //Name thread for the profiler:
             Thread.CurrentThread.Name = "Algorithm Analysis Thread";
-            Log.Trace("Engine.Main(): LEAN ALGORITHMIC TRADING ENGINE v" + Constants.Version + " Mode: " + mode);
+            Log.Trace("Engine.Main(): LEAN ALGORITHMIC TRADING ENGINE v" + Globals.Version + " Mode: " + mode);
             Log.Trace("Engine.Main(): Started " + DateTime.Now.ToShortTimeString());
             Log.Trace("Engine.Main(): Memory " + OS.ApplicationMemoryUsed + "Mb-App  " + +OS.TotalPhysicalMemoryUsed + "Mb-Used  " + OS.TotalPhysicalMemory + "Mb-Total");
 
@@ -71,7 +73,7 @@ namespace QuantConnect.Lean.Launcher
             {
                 throw new Exception("Engine.Main(): Job was null.");
             }
-
+            
             LeanEngineAlgorithmHandlers leanEngineAlgorithmHandlers;
             try
             {
@@ -81,6 +83,15 @@ namespace QuantConnect.Lean.Launcher
             {
                 Log.Error("Engine.Main(): Failed to load library: " + compositionException);
                 throw;
+            }
+
+            if (environment == "backtesting-desktop")
+            {
+                Application.EnableVisualStyles();
+                var messagingHandler = leanEngineSystemHandlers.Notify;
+                var thread = new Thread(() => LaunchUX(messagingHandler, job));
+                thread.SetApartmentState(ApartmentState.STA);
+                thread.Start();
             }
 
             // log the job endpoints
@@ -98,7 +109,7 @@ namespace QuantConnect.Lean.Launcher
             // we also don't want to reprocess redelivered jobs
             if (VersionHelper.IsNotEqualVersion(job.Version) || job.Redelivered)
             {
-                Log.Error("Engine.Run(): Job Version: " + job.Version + "  Deployed Version: " + Constants.Version + " Redelivered: " + job.Redelivered);
+                Log.Error("Engine.Run(): Job Version: " + job.Version + "  Deployed Version: " + Globals.Version + " Redelivered: " + job.Redelivered);
                 //Tiny chance there was an uncontrolled collapse of a server, resulting in an old user task circulating.
                 //In this event kill the old algorithm and leave a message so the user can later review.
                 leanEngineSystemHandlers.Api.SetAlgorithmStatus(job.AlgorithmId, AlgorithmStatus.RuntimeError, _collapseMessage);
@@ -124,6 +135,17 @@ namespace QuantConnect.Lean.Launcher
                 leanEngineAlgorithmHandlers.Dispose();
                 Log.LogHandler.Dispose();
             }
+        }
+
+        /// <summary>
+        /// Form launcher method for thread.
+        /// </summary>
+        static void LaunchUX(IMessagingHandler messaging, AlgorithmNodePacket job)
+        {
+            //Launch the UX
+            //var form = Composer.Instance.GetExportedValueByTypeName<Form>("desktop-ux-classname");
+            var form = new Views.WinForms.LeanWinForm(messaging, job);
+            Application.Run(form);
         }
     }
 }

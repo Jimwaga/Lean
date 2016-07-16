@@ -31,6 +31,7 @@ using QuantConnect.Lean.Engine.Results;
 using QuantConnect.Logging;
 using QuantConnect.Packets;
 using QuantConnect.Securities;
+using QuantConnect.Securities.Option;
 using QuantConnect.Util;
 
 namespace QuantConnect.Lean.Engine.DataFeeds
@@ -45,10 +46,9 @@ namespace QuantConnect.Lean.Engine.DataFeeds
         private ParallelRunnerController _controller;
         private IResultHandler _resultHandler;
         private Ref<TimeSpan> _fillForwardResolution;
-        private SecurityChanges _changes = SecurityChanges.None;
         private IMapFileProvider _mapFileProvider;
         private IFactorFileProvider _factorFileProvider;
-        private ConcurrentDictionary<Symbol, Subscription> _subscriptions;
+        private SubscriptionCollection _subscriptions;
         private CancellationTokenSource _cancellationTokenSource = new CancellationTokenSource();
         private UniverseSelection _universeSelection;
         private DateTime _frontierUtc;
@@ -58,7 +58,7 @@ namespace QuantConnect.Lean.Engine.DataFeeds
         /// </summary>
         public IEnumerable<Subscription> Subscriptions
         {
-            get { return _subscriptions.Select(x => x.Value); }
+            get { return _subscriptions; }
         }
 
         /// <summary>
@@ -75,7 +75,7 @@ namespace QuantConnect.Lean.Engine.DataFeeds
             _resultHandler = resultHandler;
             _mapFileProvider = mapFileProvider;
             _factorFileProvider = factorFileProvider;
-            _subscriptions = new ConcurrentDictionary<Symbol, Subscription>();
+            _subscriptions = new SubscriptionCollection();
             _universeSelection = new UniverseSelection(this, algorithm, job.Controls);
             _cancellationTokenSource = new CancellationTokenSource();
 
@@ -84,11 +84,8 @@ namespace QuantConnect.Lean.Engine.DataFeeds
             _controller = new ParallelRunnerController(threadCount);
             _controller.Start(_cancellationTokenSource.Token);
 
-            var ffres = Time.OneSecond;
+            var ffres = Time.OneMinute;
             _fillForwardResolution = Ref.Create(() => ffres, res => ffres = res);
-
-            // find the minimum resolution, ignoring ticks
-            ffres = ResolveFillForwardResolution(algorithm);
 
             // wire ourselves up to receive notifications when universes are added/removed
             algorithm.UniverseManager.CollectionChanged += (sender, args) =>
@@ -106,11 +103,7 @@ namespace QuantConnect.Lean.Engine.DataFeeds
                     case NotifyCollectionChangedAction.Remove:
                         foreach (var universe in args.OldItems.OfType<Universe>())
                         {
-                            Subscription subscription;
-                            if (_subscriptions.TryGetValue(universe.Configuration.Symbol, out subscription))
-                            {
-                                RemoveSubscription(subscription);
-                            }
+                            RemoveSubscription(universe.Configuration);
                         }
                         break;
 
@@ -120,13 +113,12 @@ namespace QuantConnect.Lean.Engine.DataFeeds
             };
         }
 
-        private Subscription CreateSubscription(Universe universe, IResultHandler resultHandler, Security security, DateTime startTimeUtc, DateTime endTimeUtc, IReadOnlyRef<TimeSpan> fillForwardResolution)
+        private Subscription CreateSubscription(Universe universe, Security security, SubscriptionDataConfig config, DateTime startTimeUtc, DateTime endTimeUtc)
         {
-            var config = security.SubscriptionDataConfig;
             var localStartTime = startTimeUtc.ConvertFromUtc(security.Exchange.TimeZone);
             var localEndTime = endTimeUtc.ConvertFromUtc(security.Exchange.TimeZone);
 
-            var tradeableDates = Time.EachTradeableDay(security, localStartTime, localEndTime);
+            var tradeableDates = Time.EachTradeableDayInTimeZone(security.Exchange.Hours, localStartTime, localEndTime, config.DataTimeZone, config.ExtendedMarketHours);
 
             // ReSharper disable once PossibleMultipleEnumeration
             if (!tradeableDates.Any())
@@ -140,17 +132,7 @@ namespace QuantConnect.Lean.Engine.DataFeeds
             if (config.SecurityType == SecurityType.Equity) mapFileResolver = _mapFileProvider.Get(config.Market);
 
             // ReSharper disable once PossibleMultipleEnumeration
-            IEnumerator<BaseData> enumerator = new SubscriptionDataReader(config, localStartTime, localEndTime, resultHandler, mapFileResolver, _factorFileProvider, tradeableDates, false);
-
-            // optionally apply fill forward logic, but never for tick data
-            if (config.FillDataForward && config.Resolution != Resolution.Tick)
-            {
-                enumerator = new FillForwardEnumerator(enumerator, security.Exchange, fillForwardResolution,
-                    security.IsExtendedMarketHours, localEndTime, config.Resolution.ToTimeSpan());
-            }
-
-            // finally apply exchange/user filters
-            enumerator = SubscriptionFilterEnumerator.WrapForDataFeed(resultHandler, enumerator, security, localEndTime);
+            var enumerator = CreateSubscriptionEnumerator(security, config, localStartTime, localEndTime, mapFileResolver, tradeableDates, true, false);
 
             var enqueueable = new EnqueueableEnumerator<BaseData>(true);
 
@@ -158,7 +140,7 @@ namespace QuantConnect.Lean.Engine.DataFeeds
             ScheduleEnumerator(enumerator, enqueueable, GetLowerThreshold(config.Resolution), GetUpperThreshold(config.Resolution));
 
             var timeZoneOffsetProvider = new TimeZoneOffsetProvider(security.Exchange.TimeZone, startTimeUtc, endTimeUtc);
-            var subscription = new Subscription(universe, security, enqueueable, timeZoneOffsetProvider, startTimeUtc, endTimeUtc, false);
+            var subscription = new Subscription(universe, security, config, enqueueable, timeZoneOffsetProvider, startTimeUtc, endTimeUtc, false);
             return subscription;
         }
 
@@ -207,13 +189,12 @@ namespace QuantConnect.Lean.Engine.DataFeeds
         /// </summary>
         /// <param name="universe">The universe the subscription is to be added to</param>
         /// <param name="security">The security to add a subscription for</param>
+        /// <param name="config">The subscription config to be added</param>
         /// <param name="utcStartTime">The start time of the subscription</param>
         /// <param name="utcEndTime">The end time of the subscription</param>
-        public bool AddSubscription(Universe universe, Security security, DateTime utcStartTime, DateTime utcEndTime)
+        public bool AddSubscription(Universe universe, Security security, SubscriptionDataConfig config, DateTime utcStartTime, DateTime utcEndTime)
         {
-            _fillForwardResolution.Value = ResolveFillForwardResolution(_algorithm);
-
-            var subscription = CreateSubscription(universe, _resultHandler, security, utcStartTime, utcEndTime, _fillForwardResolution);
+            var subscription = CreateSubscription(universe, security, config, utcStartTime, utcEndTime);
             if (subscription == null)
             {
                 // subscription will be null when there's no tradeable dates for the security between the requested times, so
@@ -223,14 +204,10 @@ namespace QuantConnect.Lean.Engine.DataFeeds
 
             Log.Debug("FileSystemDataFeed.AddSubscription(): Added " + security.Symbol.ID + " Start: " + utcStartTime + " End: " + utcEndTime);
 
-            _subscriptions.AddOrUpdate(subscription.Security.Symbol,  subscription);
-
-            // prime the pump, run method checks current before move next calls
-            //PrimeSubscriptionPump(subscription, true);
-
-            _changes += SecurityChanges.Added(security);
-
-            _fillForwardResolution.Value = ResolveFillForwardResolution(_algorithm);
+            if (_subscriptions.TryAdd(subscription))
+            {
+            UpdateFillForwardResolution();
+            }
 
             return true;
         }
@@ -238,21 +215,22 @@ namespace QuantConnect.Lean.Engine.DataFeeds
         /// <summary>
         /// Removes the subscription from the data feed, if it exists
         /// </summary>
-        /// <param name="subscription">The subscription to be removed</param>
-        public bool RemoveSubscription(Subscription subscription)
+        /// <param name="configuration">The configuration of the subscription to remove</param>
+        /// <returns>True if the subscription was successfully removed, false otherwise</returns>
+        public bool RemoveSubscription(SubscriptionDataConfig configuration)
         {
-            Subscription sub;
-            if (!_subscriptions.TryRemove(subscription.Security.Symbol, out sub))
+            Subscription subscription;
+            if (!_subscriptions.TryRemove(configuration, out subscription))
             {
-                Log.Error("FileSystemDataFeed.RemoveSubscription(): Unable to remove: " + subscription.Security.Symbol.ToString());
+                Log.Error("FileSystemDataFeed.RemoveSubscription(): Unable to remove: " + configuration.ToString());
                 return false;
             }
 
-            Log.Debug("FileSystemDataFeed.RemoveSubscription(): Removed " + subscription.Security.Symbol.ToString());
+                subscription.Dispose();
+            Log.Debug("FileSystemDataFeed.RemoveSubscription(): Removed " + configuration.ToString());
 
-            _changes += SecurityChanges.Removed(sub.Security);
+            UpdateFillForwardResolution();
 
-            _fillForwardResolution.Value = ResolveFillForwardResolution(_algorithm);
             return true;
         }
 
@@ -331,8 +309,12 @@ namespace QuantConnect.Lean.Engine.DataFeeds
             var marketHoursDatabase = MarketHoursDatabase.FromDataFolder();
             var exchangeHours = marketHoursDatabase.GetExchangeHours(config);
 
-            // create a canonical security object
-            var security = new Security(exchangeHours, config, _algorithm.Portfolio.CashBook[CashBook.AccountCurrency], SymbolProperties.GetDefault(CashBook.AccountCurrency));
+            Security security;
+            if (!_algorithm.Securities.TryGetValue(config.Symbol, out security))
+            {
+                // create a canonical security object if it doesn't exist
+                security = new Security(exchangeHours, config, _algorithm.Portfolio.CashBook[CashBook.AccountCurrency], SymbolProperties.GetDefault(CashBook.AccountCurrency));
+            }
 
             var localStartTime = startTimeUtc.ConvertFromUtc(security.Exchange.TimeZone);
             var localEndTime = endTimeUtc.ConvertFromUtc(security.Exchange.TimeZone);
@@ -340,7 +322,7 @@ namespace QuantConnect.Lean.Engine.DataFeeds
             // define our data enumerator
             IEnumerator<BaseData> enumerator;
 
-            var tradeableDates = Time.EachTradeableDay(security, localStartTime, localEndTime);
+            var tradeableDates = Time.EachTradeableDayInTimeZone(security.Exchange.Hours, localStartTime, localEndTime, config.DataTimeZone, config.ExtendedMarketHours);
 
             var userDefined = universe as UserDefinedUniverse;
             if (userDefined != null)
@@ -361,25 +343,40 @@ namespace QuantConnect.Lean.Engine.DataFeeds
             {
                 var cf = new CoarseFundamental();
 
-                var enqueueable = new EnqueueableEnumerator<BaseData>(true);
-
                 // load coarse data day by day
-                var coarse = from date in Time.EachTradeableDay(security, _algorithm.StartDate, _algorithm.EndDate)
-                             let dateInDataTimeZone = date.ConvertTo(config.ExchangeTimeZone, config.DataTimeZone).Date
-                             let factory = new BaseDataSubscriptionFactory(config, dateInDataTimeZone, false)
-                             let source = cf.GetSource(config, dateInDataTimeZone, false)
+                enumerator = (from date in Time.EachTradeableDayInTimeZone(security.Exchange.Hours, _algorithm.StartDate, _algorithm.EndDate, config.DataTimeZone, config.ExtendedMarketHours)
+                             let source = cf.GetSource(config, date, false)
+                             let factory = SubscriptionDataSourceReader.ForSource(source, config, date, false)
                              let coarseFundamentalForDate = factory.Read(source)
-                             select new BaseDataCollection(date, config.Symbol, coarseFundamentalForDate);
-
+                             select new BaseDataCollection(date.AddDays(1), config.Symbol, coarseFundamentalForDate)
+                             ).GetEnumerator();
                 
-                ScheduleEnumerator(coarse.GetEnumerator(), enqueueable, 5, 100000, 2);
+                var enqueueable = new EnqueueableEnumerator<BaseData>(true);
+                ScheduleEnumerator(enumerator, enqueueable, 5, 100000, 2);
+
+                enumerator = enqueueable;
+            }
+            else if (config.SecurityType == SecurityType.Option && security is Option)
+            {
+                var configs = universe.GetSubscriptions(security);
+                var enumerators = configs.Select(c =>
+                    CreateSubscriptionEnumerator(security, c, localStartTime, localEndTime, _mapFileProvider.Get(c.Market), tradeableDates, false, true)
+                    ).ToList();
+
+                var sync = new SynchronizingEnumerator(enumerators);
+                enumerator = new OptionChainUniverseDataCollectionAggregatorEnumerator(sync, config.Symbol);
+
+                var enqueueable = new EnqueueableEnumerator<BaseData>(true);
+                
+                // add this enumerator to our exchange
+                ScheduleEnumerator(enumerator, enqueueable, GetLowerThreshold(config.Resolution), GetUpperThreshold(config.Resolution));
 
                 enumerator = enqueueable;
             }
             else
             {
                 // normal reader for all others
-                enumerator = new SubscriptionDataReader(config, localStartTime, localEndTime, _resultHandler, MapFileResolver.Empty, _factorFileProvider, tradeableDates, false);
+                enumerator = CreateSubscriptionEnumerator(security, config, localStartTime, localEndTime, MapFileResolver.Empty, tradeableDates, true, false);
 
                 // route these custom subscriptions through the exchange for buffering
                 var enqueueable = new EnqueueableEnumerator<BaseData>(true);
@@ -392,8 +389,11 @@ namespace QuantConnect.Lean.Engine.DataFeeds
 
             // create the subscription
             var timeZoneOffsetProvider = new TimeZoneOffsetProvider(security.Exchange.TimeZone, startTimeUtc, endTimeUtc);
-            var subscription = new Subscription(universe, security, enumerator, timeZoneOffsetProvider, startTimeUtc, endTimeUtc, true);
-            _subscriptions.AddOrUpdate(subscription.Security.Symbol, subscription);
+            var subscription = new Subscription(universe, security, config, enumerator, timeZoneOffsetProvider, startTimeUtc, endTimeUtc, true);
+
+            _subscriptions.TryAdd(subscription);
+
+            UpdateFillForwardResolution();
         }
 
         /// <summary>
@@ -405,14 +405,17 @@ namespace QuantConnect.Lean.Engine.DataFeeds
             _cancellationTokenSource.Cancel();
         }
 
-        private static TimeSpan ResolveFillForwardResolution(IAlgorithm algorithm)
+        /// <summary>
+        /// Updates the fill forward resolution by checking all existing subscriptions and
+        /// selecting the smallest resoluton not equal to tick
+        /// </summary>
+        private void UpdateFillForwardResolution()
         {
-            return algorithm.SubscriptionManager.Subscriptions
-                .Where(x => !x.IsInternalFeed)
-                .Select(x => x.Resolution)
-                .Union(algorithm.UniverseManager.Select(x => x.Value.UniverseSettings.Resolution))
+            _fillForwardResolution.Value = _subscriptions
+                .Where(x => !x.Configuration.IsInternalFeed)
+                .Select(x => x.Configuration.Resolution)
                 .Where(x => x != Resolution.Tick)
-                .DefaultIfEmpty(Resolution.Second)
+                .DefaultIfEmpty(Resolution.Minute)
                 .Min().ToTimeSpan();
         }
 
@@ -432,11 +435,8 @@ namespace QuantConnect.Lean.Engine.DataFeeds
             var syncer = new SubscriptionSynchronizer(_universeSelection);
             syncer.SubscriptionFinished += (sender, subscription) =>
             {
-                if (subscription.EndOfStream && _subscriptions.TryRemove(subscription.Security.Symbol, out subscription))
-                {
+                RemoveSubscription(subscription.Configuration);
                     Log.Debug(string.Format("FileSystemDataFeed.GetEnumerator(): Finished subscription: {0} at {1} UTC", subscription.Security.Symbol.ID, _frontierUtc));
-                    subscription.Dispose();
-                }
             };
 
             while (!_cancellationTokenSource.IsCancellationRequested)
@@ -492,6 +492,54 @@ namespace QuantConnect.Lean.Engine.DataFeeds
             return GetEnumerator();
         }
 
+        /// <summary>
+        /// Creates an enumerator for the specified security/configuration
+        /// </summary>
+        private IEnumerator<BaseData> CreateSubscriptionEnumerator(Security security,
+            SubscriptionDataConfig config,
+            DateTime localStartTime,
+            DateTime localEndTime,
+            MapFileResolver mapFileResolver,
+            IEnumerable<DateTime> tradeableDates,
+            bool useSubscriptionDataReader,
+            bool aggregate)
+        {
+            IEnumerator<BaseData> enumerator;
+            if (useSubscriptionDataReader)
+        {
+                enumerator = new SubscriptionDataReader(config, localStartTime, localEndTime, _resultHandler, mapFileResolver,
+                _factorFileProvider, tradeableDates, false);
+            }
+            else
+            {
+                var sourceFactory = (BaseData)Activator.CreateInstance(config.Type);
+                enumerator = (from date in tradeableDates
+                              let source = sourceFactory.GetSource(config, date, false)
+                              let factory = SubscriptionDataSourceReader.ForSource(source, config, date, false)
+                              let entriesForDate = factory.Read(source)
+                              from entry in entriesForDate
+                              select entry).GetEnumerator();
+            }
+
+            if (aggregate)
+            {
+                enumerator = new BaseDataCollectionAggregatorEnumerator(enumerator, config.Symbol);
+            }
+
+            // optionally apply fill forward logic, but never for tick data
+            if (config.FillDataForward && config.Resolution != Resolution.Tick)
+            {
+                enumerator = new FillForwardEnumerator(enumerator, security.Exchange, _fillForwardResolution,
+                    security.IsExtendedMarketHours, localEndTime, config.Resolution.ToTimeSpan());
+            }
+
+            // optionally apply exchange/user filters
+            if (config.IsFilteredSubscription)
+            {
+                enumerator = SubscriptionFilterEnumerator.WrapForDataFeed(_resultHandler, enumerator, security, localEndTime);
+            }
+            return enumerator;
+        }
 
         private int GetLowerThreshold(Resolution resolution)
         {

@@ -28,6 +28,16 @@ namespace QuantConnect.Data
         /// <summary>
         /// Binary file data
         /// </summary>
-        Binary
+        Binary,
+
+        /// <summary>
+        /// Only the zip entry names are read in as symbols
+        /// </summary>
+        ZipEntryName,
+
+        /// <summary>
+        /// Reader returns a BaseDataCollection object.
+        /// </summary>
+        Collection
     }
 }

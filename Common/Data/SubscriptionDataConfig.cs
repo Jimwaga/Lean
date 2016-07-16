@@ -17,7 +17,6 @@ using System;
 using System.Collections.Generic;
 using System.ComponentModel;
 using System.Runtime.CompilerServices;
-using System.Text.RegularExpressions;
 using NodaTime;
 using QuantConnect.Data.Consolidators;
 using QuantConnect.Securities;
@@ -27,7 +26,7 @@ namespace QuantConnect.Data
     /// <summary>
     /// Subscription data required including the type of data.
     /// </summary>
-    public class SubscriptionDataConfig
+    public class SubscriptionDataConfig : IEquatable<SubscriptionDataConfig>
     {
         private Symbol _symbol;
         private string _mappedSymbol;
@@ -50,6 +49,11 @@ namespace QuantConnect.Data
         {
             get { return _symbol; }
         }
+
+        /// <summary>
+        /// Trade or quote data
+        /// </summary>
+        public readonly TickType TickType;
 
         /// <summary>
         /// Resolution of the asset we're requesting, second minute or tick
@@ -130,6 +134,11 @@ namespace QuantConnect.Data
         public readonly HashSet<IDataConsolidator> Consolidators;
 
         /// <summary>
+        /// Gets whether or not this subscription should have filters applied to it (market hours/user filters from security)
+        /// </summary>
+        public readonly bool IsFilteredSubscription;
+
+        /// <summary>
         /// Constructor for Data Subscriptions
         /// </summary>
         /// <param name="objectType">Type of the data objects.</param>
@@ -143,6 +152,8 @@ namespace QuantConnect.Data
         /// <param name="isInternalFeed">Set to true if this subscription is added for the sole purpose of providing currency conversion rates,
         /// setting this flag to true will prevent the data from being sent into the algorithm's OnData methods</param>
         /// <param name="isCustom">True if this is user supplied custom data, false for normal QC data</param>
+        /// <param name="tickType">Specifies if trade or quote data is subscribed</param>
+        /// <param name="isFilteredSubscription">True if this subscription should have filters applied to it (market hours/user filters from security), false otherwise</param>
         public SubscriptionDataConfig(Type objectType,
             Symbol symbol,
             Resolution resolution,
@@ -151,8 +162,15 @@ namespace QuantConnect.Data
             bool fillForward,
             bool extendedHours,
             bool isInternalFeed,
-            bool isCustom = false)
+            bool isCustom = false,
+            TickType? tickType = null,
+            bool isFilteredSubscription = true)
         {
+            if (objectType == null) throw new ArgumentNullException("objectType");
+            if (symbol == null) throw new ArgumentNullException("symbol");
+            if (dataTimeZone == null) throw new ArgumentNullException("dataTimeZone");
+            if (exchangeTimeZone == null) throw new ArgumentNullException("exchangeTimeZone");
+
             Type = objectType;
             SecurityType = symbol.ID.SecurityType;
             Resolution = resolution;
@@ -166,7 +184,21 @@ namespace QuantConnect.Data
             Market = symbol.ID.Market;
             DataTimeZone = dataTimeZone;
             ExchangeTimeZone = exchangeTimeZone;
+            IsFilteredSubscription = isFilteredSubscription;
             Consolidators = new HashSet<IDataConsolidator>();
+
+            if (!tickType.HasValue)
+            {
+                TickType = TickType.Trade;
+                if (SecurityType == SecurityType.Forex || SecurityType == SecurityType.Cfd || SecurityType == SecurityType.Option)
+                {
+                    TickType = TickType.Quote;
+                }
+            }
+            else
+            {
+                TickType = tickType.Value;
+            }
 
             switch (resolution)
             {
@@ -207,6 +239,8 @@ namespace QuantConnect.Data
         /// <param name="isInternalFeed">Set to true if this subscription is added for the sole purpose of providing currency conversion rates,
         /// setting this flag to true will prevent the data from being sent into the algorithm's OnData methods</param>
         /// <param name="isCustom">True if this is user supplied custom data, false for normal QC data</param>
+        /// <param name="tickType">Specifies if trade or quote data is subscribed</param>
+        /// <param name="isFilteredSubscription">True if this subscription should have filters applied to it (market hours/user filters from security), false otherwise</param>
         public SubscriptionDataConfig(SubscriptionDataConfig config,
             Type objectType = null,
             Symbol symbol = null,
@@ -216,7 +250,9 @@ namespace QuantConnect.Data
             bool? fillForward = null,
             bool? extendedHours = null,
             bool? isInternalFeed = null,
-            bool? isCustom = null)
+            bool? isCustom = null,
+            TickType? tickType = null,
+            bool? isFilteredSubscription = null)
             : this(
             objectType ?? config.Type,
             symbol ?? config.Symbol,
@@ -226,7 +262,9 @@ namespace QuantConnect.Data
             fillForward ?? config.FillDataForward,
             extendedHours ?? config.ExtendedMarketHours,
             isInternalFeed ?? config.IsInternalFeed,
-            isCustom ?? config.IsCustomData
+            isCustom ?? config.IsCustomData,
+            tickType ?? config.TickType,
+            isFilteredSubscription ?? config.IsFilteredSubscription
             )
         {
         }
@@ -255,5 +293,95 @@ namespace QuantConnect.Data
             }
         }
 
+        /// <summary>
+        /// Indicates whether the current object is equal to another object of the same type.
+        /// </summary>
+        /// <returns>
+        /// true if the current object is equal to the <paramref name="other"/> parameter; otherwise, false.
+        /// </returns>
+        /// <param name="other">An object to compare with this object.</param>
+        public bool Equals(SubscriptionDataConfig other)
+        {
+            if (ReferenceEquals(null, other)) return false;
+            if (ReferenceEquals(this, other)) return true;
+            return _sid.Equals(other._sid) && Type == other.Type 
+                && TickType == other.TickType 
+                && Resolution == other.Resolution
+                && FillDataForward == other.FillDataForward 
+                && ExtendedMarketHours == other.ExtendedMarketHours 
+                && IsInternalFeed == other.IsInternalFeed
+                && IsCustomData == other.IsCustomData 
+                && DataTimeZone.Equals(other.DataTimeZone) 
+                && ExchangeTimeZone.Equals(other.ExchangeTimeZone)
+                && IsFilteredSubscription == other.IsFilteredSubscription;
+        }
+
+        /// <summary>
+        /// Determines whether the specified object is equal to the current object.
+        /// </summary>
+        /// <returns>
+        /// true if the specified object  is equal to the current object; otherwise, false.
+        /// </returns>
+        /// <param name="obj">The object to compare with the current object. </param>
+        public override bool Equals(object obj)
+        {
+            if (ReferenceEquals(null, obj)) return false;
+            if (ReferenceEquals(this, obj)) return true;
+            if (obj.GetType() != this.GetType()) return false;
+            return Equals((SubscriptionDataConfig) obj);
+        }
+
+        /// <summary>
+        /// Serves as the default hash function. 
+        /// </summary>
+        /// <returns>
+        /// A hash code for the current object.
+        /// </returns>
+        public override int GetHashCode()
+        {
+            unchecked
+            {
+                var hashCode = _sid.GetHashCode();
+                hashCode = (hashCode*397) ^ Type.GetHashCode();
+                hashCode = (hashCode*397) ^ (int) TickType;
+                hashCode = (hashCode*397) ^ (int) Resolution;
+                hashCode = (hashCode*397) ^ FillDataForward.GetHashCode();
+                hashCode = (hashCode*397) ^ ExtendedMarketHours.GetHashCode();
+                hashCode = (hashCode*397) ^ IsInternalFeed.GetHashCode();
+                hashCode = (hashCode*397) ^ IsCustomData.GetHashCode();
+                hashCode = (hashCode*397) ^ DataTimeZone.GetHashCode();
+                hashCode = (hashCode*397) ^ ExchangeTimeZone.GetHashCode();
+                hashCode = (hashCode*397) ^ IsFilteredSubscription.GetHashCode();
+                return hashCode;
+            }
+        }
+
+        /// <summary>
+        /// Override equals operator
+        /// </summary>
+        public static bool operator ==(SubscriptionDataConfig left, SubscriptionDataConfig right)
+        {
+            return Equals(left, right);
+        }
+
+        /// <summary>
+        /// Override not equals operator
+        /// </summary>
+        public static bool operator !=(SubscriptionDataConfig left, SubscriptionDataConfig right)
+        {
+            return !Equals(left, right);
+        }
+
+        /// <summary>
+        /// Returns a string that represents the current object.
+        /// </summary>
+        /// <returns>
+        /// A string that represents the current object.
+        /// </returns>
+        /// <filterpriority>2</filterpriority>
+        public override string ToString()
+        {
+            return Symbol.ToString() + "," + MappedSymbol + "," + Resolution;
+        }
     }
 }

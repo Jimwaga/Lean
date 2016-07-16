@@ -593,7 +593,7 @@ namespace QuantConnect.Securities
             var security = Securities[dividend.Symbol];
 
             // only apply dividends when we're in raw mode or split adjusted mode
-            var mode = security.SubscriptionDataConfig.DataNormalizationMode;
+            var mode = security.DataNormalizationMode;
             if (mode == DataNormalizationMode.Raw || mode == DataNormalizationMode.SplitAdjusted)
             {
                 // longs get benefits, shorts get clubbed on dividends
@@ -613,7 +613,7 @@ namespace QuantConnect.Securities
             var security = Securities[split.Symbol];
 
             // only apply splits in raw data mode, 
-            var mode = security.SubscriptionDataConfig.DataNormalizationMode;
+            var mode = security.DataNormalizationMode;
             if (mode != DataNormalizationMode.Raw)
             {
                 return;
@@ -632,6 +632,14 @@ namespace QuantConnect.Securities
 
             // build a 'next' value to update the market prices in light of the split factor
             var next = security.GetLastData();
+            if (next == null)
+            {
+                // sometimes we can get splits before we receive data which
+                // will cause this to return null, in this case we can't possibly
+                // have any holdings or price to set since we haven't received
+                // data yet, so just do nothing
+                return;
+            }
             next.Value *= split.SplitFactor;
 
             // make sure to modify open/high/low as well for tradebar data types

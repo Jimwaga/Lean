@@ -875,6 +875,7 @@ namespace QuantConnect.Brokerages.InteractiveBrokers
 
                 // mark sells as negative quantities
                 var fillQuantity = order.Direction == OrderDirection.Buy ? filledThisTime : -filledThisTime;
+                order.PriceCurrency = _securityProvider.GetSecurity(order.Symbol).SymbolProperties.QuoteCurrency;
                 var orderEvent = new OrderEvent(order, DateTime.UtcNow, orderFee, "Interactive Brokers Fill Event")
                 {
                     Status = status,
@@ -922,6 +923,7 @@ namespace QuantConnect.Brokerages.InteractiveBrokers
             {
                 ClientId = _clientID,
                 OrderId = ibOrderID,
+                Account = _account,
                 Action = ConvertOrderDirection(order.Direction),
                 TotalQuantity = Math.Abs(order.Quantity),
                 OrderType = ConvertOrderType(order.Type),
@@ -1044,6 +1046,14 @@ namespace QuantConnect.Brokerages.InteractiveBrokers
                 contract.Exchange = "IDEALPRO";
                 contract.Symbol = ibSymbol.Substring(0, 3);
                 contract.Currency = ibSymbol.Substring(3);
+            }
+
+            if (symbol.ID.SecurityType == SecurityType.Option)
+            {
+                contract.Expiry = symbol.ID.Date.ToString(DateFormat.EightCharacter);
+                contract.Right = symbol.ID.OptionRight == OptionRight.Call ? IB.RightType.Call : IB.RightType.Put;
+                contract.Strike = Convert.ToDouble(symbol.ID.StrikePrice);
+                contract.Symbol = symbol.ID.Symbol;
             }
 
             // some contracts require this, such as MSFT
@@ -1358,6 +1368,7 @@ namespace QuantConnect.Brokerages.InteractiveBrokers
                 Client.RequestMarketData(id, contract, null, false, false);
 
                 _subscribedSymbols[symbol] = id;
+                _subscribedTickets[id] = symbol;
             }
         }
 
@@ -1490,6 +1501,7 @@ namespace QuantConnect.Brokerages.InteractiveBrokers
                     _lastBidSizes[symbol] = tick.Quantity;
 
                     tick.Value = tick.BidPrice;
+                    tick.BidSize = tick.Quantity;
                     break;
 
                 case IB.TickType.AskSize:
@@ -1500,6 +1512,7 @@ namespace QuantConnect.Brokerages.InteractiveBrokers
                     _lastAskSizes[symbol] = tick.Quantity;
 
                     tick.Value = tick.AskPrice;
+                    tick.AskSize = tick.Quantity;
                     break;
                 
                 
